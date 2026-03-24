@@ -2,6 +2,11 @@
 
 **Version:** 1.1.0 | **Python:** 3.11+ | **License:** MIT
 
+[![GitHub Pages](https://img.shields.io/badge/docs-live-blue?logo=github)](https://venkateshTechmates.github.io/AICoreAndShared/)
+[![GitHub Repo](https://img.shields.io/badge/repo-AICoreAndShared-181717?logo=github)](https://github.com/venkateshTechmates/AICoreAndShared)
+
+> **Live Documentation:** https://venkateshTechmates.github.io/AICoreAndShared/
+
 A production-ready, enterprise-grade AI library split into two packages:
 
 | Package | Purpose |
@@ -14,7 +19,7 @@ A production-ready, enterprise-grade AI library split into two packages:
 ## Workspace Structure
 
 ```
-AIMainCoreAndShared/
+AICoreAndShared/
 ├── ai_core/                    # Core AI/ML library
 │   ├── agents.py               # ReAct, PlanExecute, Reflexion, FunctionCall agents
 │   ├── chunking.py             # 10 chunking strategies
@@ -65,9 +70,10 @@ AIMainCoreAndShared/
 │       ├── test_security.py
 │       └── test_tokens.py
 │
-├── AICoreAndShared/            # Frontend documentation app (Node.js / Vite)
+├── UI/                         # Frontend documentation app (React + Vite)
 │   ├── src/                    # React + TypeScript components
-│   └── docs/                   # Architecture and API documentation
+│   ├── docs/                   # Architecture and API documentation
+│   └── public/                 # Static assets (404.html for SPA routing)
 │
 ├── pyproject.toml              # Package metadata + optional dependency groups
 ├── requirements.txt            # Pinned development dependencies
@@ -238,11 +244,17 @@ make clean       # remove build artifacts
 
 ## Architecture Documentation
 
-See [`AICoreAndShared/docs/`](AICoreAndShared/docs/) for:
-- [01 — Core Library](AICoreAndShared/docs/01-core-library.md)
-- [02 — Shared Library](AICoreAndShared/docs/02-shared-library.md)
-- [03 — Architecture & Workflows](AICoreAndShared/docs/03-architecture-workflows.md)
-- [04 — Trends & Design Patterns](AICoreAndShared/docs/04-trends-design-patterns.md)
-- [05 — Enterprise Operations](AICoreAndShared/docs/05-enterprise-operations.md)
+> **Browse online:** https://venkateshTechmates.github.io/AICoreAndShared/
 
-Frontend documentation app: `cd AICoreAndShared && npm install && npm run dev`
+See [`UI/docs/`](UI/docs/) for:
+- [01 — Core Library](UI/docs/01-core-library.md)
+- [02 — Shared Library](UI/docs/02-shared-library.md)
+- [03 — Architecture & Workflows](UI/docs/03-architecture-workflows.md)
+- [04 — Trends & Design Patterns](UI/docs/04-trends-design-patterns.md)
+- [05 — Enterprise Operations](UI/docs/05-enterprise-operations.md)
+
+### Run the documentation app locally
+
+```bash
+cd UI && npm install && npm run dev
+```
