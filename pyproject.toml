@@ -1,0 +1,133 @@
+[build-system]
+requires = ["setuptools>=70.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-enterprise-toolkit"
+version = "1.1.0"
+description = "Enterprise AI Core & Shared Libraries — LLM, RAG, Agents, Embeddings, Vector Stores, and more"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "QCMetric Engineering"}
+]
+keywords = ["ai", "llm", "rag", "agents", "embeddings", "vector-store", "enterprise"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "pydantic>=2.0,<3.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+openai = ["openai>=1.30"]
+anthropic = ["anthropic>=0.30"]
+azure = ["openai>=1.30"]
+groq = ["groq>=0.9"]
+cohere = ["cohere>=5.0"]
+ollama = ["ollama>=0.3"]
+together = ["together>=1.0"]
+
+bedrock = ["boto3>=1.34"]
+vertex = ["google-generativeai>=0.7"]
+
+# Vector stores
+qdrant = ["qdrant-client>=1.10"]
+pinecone = ["pinecone-client>=3.0"]
+chroma = ["chromadb>=0.5"]
+weaviate = ["weaviate-client>=4.0"]
+milvus = ["pymilvus>=2.4"]
+pgvector = ["asyncpg>=0.29"]
+redis-vss = ["redis>=5.0"]
+opensearch = ["opensearch-py>=2.5"]
+azure-search = ["azure-search-documents>=11.4"]
+
+# Embeddings
+huggingface = ["sentence-transformers>=3.0"]
+jina = ["httpx>=0.27"]
+
+# Rerankers
+rerankers = ["sentence-transformers>=3.0", "cohere>=5.0"]
+
+# Observability
+langsmith = ["langsmith>=0.1"]
+langfuse = ["langfuse>=2.0"]
+opentelemetry = ["opentelemetry-api>=1.25", "opentelemetry-sdk>=1.25"]
+
+# Auth
+jwt = ["PyJWT>=2.8"]
+
+# Token counting
+tiktoken = ["tiktoken>=0.7"]
+
+# Cache
+redis = ["redis>=5.0"]
+
+# Database
+postgres = ["asyncpg>=0.29"]
+
+# Real-time
+signalr = ["signalr-async>=0.3"]
+
+# Frameworks
+langchain = ["langchain>=0.2", "langchain-core>=0.2"]
+langgraph = ["langgraph>=0.1"]
+crewai = ["crewai>=0.50"]
+autogen = ["pyautogen>=0.2"]
+
+# Evaluation
+ragas = ["ragas>=0.1"]
+deepeval = ["deepeval>=0.21"]
+
+# All providers
+all = [
+    "ai-enterprise-toolkit[openai,anthropic,groq,cohere,ollama,together,bedrock,vertex]",
+    "ai-enterprise-toolkit[qdrant,pinecone,chroma,weaviate,milvus,pgvector,redis-vss,opensearch,azure-search]",
+    "ai-enterprise-toolkit[huggingface,jina,tiktoken,rerankers]",
+    "ai-enterprise-toolkit[langsmith,langfuse]",
+    "ai-enterprise-toolkit[jwt,redis,postgres]",
+    "ai-enterprise-toolkit[ragas,deepeval]",
+]
+
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.urls]
+Repository = "https://github.com/qcmetric/ai-enterprise-toolkit"
+Documentation = "https://qcmetric.github.io/ai-enterprise-toolkit"
+
+[tool.setuptools.packages.find]
+include = ["ai_core*", "ai_shared*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
