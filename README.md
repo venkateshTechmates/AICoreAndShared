@@ -20,7 +20,11 @@ A production-ready, enterprise-grade AI library split into two packages:
 
 - **Multi-Agent Orchestration** — 6 coordination modes: Sequential, Parallel, Debate, Hierarchical, Swarm, Supervisor
 - **MessageBus** — Pub/sub system with dead-letter queues and topic-based routing
-- **AgentPipelineBuilder** — Fluent API for composing agent pipelines
+- **AgentPipelineBuilder** — Fluent API with `add_stage()`/`with_mode()` aliases alongside `add_agent()`/`with_coordination()`
+- **FunctionCallAgent** — OpenAI-style structured tool schema; parses `tool_calls` list with text-parsing fallback
+- **StructuredOutputAgent** — Optional Pydantic model validation; strips markdown fences before JSON parse
+- **BaseAgent retry** — `_call_llm_with_retry()` with exponential backoff (default 3 retries, 1 s base delay)
+- **OrchestrationResult** — New `consensus`, `metadata` fields + `results`/`final_answer`/`cost` property aliases
 - **Domain Examples** — Real-world examples: Medical (HIPAA), E-commerce, Real Estate, Loan Processing
 - **Expanded Compliance** — Real verification methods for HIPAA, GDPR, SOC2, PCI-DSS
 - **247 Tests** — Comprehensive test coverage across all modules (agents, compliance, governance, cost)
@@ -181,18 +185,41 @@ print(response.answer)
 ### Agents
 
 ```python
-from ai_core.agents import AgentExecutor, tool
+from ai_core.agents import AgentExecutor, Tool, tool, ToolRegistry
 from ai_core.schemas import AgentType
 from ai_core.llm import LLMFactory
 
-@tool
-def search_web(query: str) -> str:
-    """Search the web for information."""
+# Register a tool with the @tool decorator factory
+@tool("search_web", description="Search the web for information.")
+async def search_web(query: str) -> str:
     return f"Results for: {query}"
 
+# Create an agent via AgentExecutor factory
 llm = LLMFactory.create("openai", "gpt-4o-mini")
-agent = AgentExecutor.create(AgentType.REACT, llm=llm, tools=[search_web])
+agent = AgentExecutor.create(AgentType.REACT, llm=llm, tools=[ToolRegistry.get("search_web")])
 result = await agent.run("What is the latest news about AI?")
+print(result.output)
+
+# FunctionCallAgent — uses OpenAI-style structured tool schema (no text heuristics)
+fc_agent = AgentExecutor.create(AgentType.FUNCTION_CALL, llm=llm, tools=[ToolRegistry.get("search_web")])
+result = await fc_agent.run("Find recent papers on LLM alignment.")
+print(result.tool_calls)   # list of {"tool": ..., "args": ..., "result": ...}
+
+# StructuredOutputAgent — with optional Pydantic model validation
+from pydantic import BaseModel
+from ai_core.schemas import AgentType
+
+class SentimentResult(BaseModel):
+    sentiment: str
+    confidence: float
+    reasoning: str
+
+s_agent = AgentExecutor.create(AgentType.STRUCTURED, llm=llm)
+result = await s_agent.run("Analyse sentiment: 'I love this product!'", output_schema=SentimentResult)
+print(result.output)  # validated JSON
+
+# BaseAgent retry — built-in exponential backoff for transient LLM failures
+# All agents inherit _call_llm_with_retry(prompt, max_retries=3, initial_delay=1.0)
 ```
 
 ### Multi-Agent Orchestration

@@ -17,8 +17,13 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable
+from typing import Any, Callable, Type
 from uuid import uuid4
+
+try:
+    from pydantic import BaseModel as _PydanticBaseModel
+except ImportError:  # pragma: no cover
+    _PydanticBaseModel = None  # type: ignore[assignment,misc]
 
 from ai_core.schemas import AgentResponse, AgentStep, AgentType, TokenUsage, ToolDefinition
 
@@ -213,6 +218,41 @@ class BaseAgent(ABC):
             lines.append(f"- {t.name}: {t.description}")
         return "\n".join(lines)
 
+    def _tool_schemas(self) -> list[dict[str, Any]]:
+        """Return tools in OpenAI function-calling schema format."""
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": t.description,
+                    "parameters": t.input_schema if t.input_schema else {"type": "object", "properties": {}},
+                },
+            }
+            for t in self.tools.values()
+        ]
+
+    async def _call_llm_with_retry(
+        self,
+        prompt_or_messages: str | list[dict[str, Any]],
+        *,
+        max_retries: int = 3,
+        initial_delay: float = 1.0,
+        **kwargs: Any,
+    ) -> Any:
+        """Call LLM with exponential-backoff retry on transient failures."""
+        last_exc: Exception | None = None
+        for attempt in range(max_retries):
+            try:
+                if isinstance(prompt_or_messages, str):
+                    return await self.llm.generate(prompt_or_messages, **kwargs)
+                return await self.llm.chat(prompt_or_messages, **kwargs)
+            except Exception as exc:
+                last_exc = exc
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(initial_delay * (2 ** attempt))
+        raise last_exc  # type: ignore[misc]
+
 
 # ── Agent Implementations ────────────────────────────────────────────────────
 
@@ -379,59 +419,128 @@ class ReflexionAgent(BaseAgent):
 
 
 class FunctionCallAgent(BaseAgent):
-    """Function-calling agent using structured tool-use API."""
+    """Function-calling agent using OpenAI-style structured tool-use API."""
 
     async def run(self, query: str, **kwargs: Any) -> AgentResponse:
-        tool_schemas = [
-            {"name": t.name, "description": t.description, "parameters": t.input_schema}
-            for t in self.tools.values()
-        ]
-        messages = [
-            {"role": "system", "content": "Use the provided functions to answer the user's question."},
+        schemas = self._tool_schemas()
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": "You are a helpful assistant. Use the provided tools when needed."},
             {"role": "user", "content": query},
         ]
 
         steps: list[AgentStep] = []
         total_tokens = TokenUsage()
+        all_tool_calls: list[dict[str, Any]] = []
 
         for _ in range(self.max_iterations):
-            resp = await self.llm.chat(messages)
+            # Pass tool schemas to the LLM; fall back gracefully if unsupported
+            try:
+                resp = await self.llm.chat(messages, tools=schemas, tool_choice="auto")
+            except TypeError:
+                resp = await self.llm.chat(messages)
+
             total_tokens.input += resp.usage.input
             total_tokens.output += resp.usage.output
             total_tokens.total += resp.usage.total
 
-            # Simple heuristic: check if response calls a tool
-            text = resp.text
-            has_tool_call = any(t.name in text for t in self.tools.values())
+            # --- Structured tool_calls path ---
+            if resp.tool_calls:
+                for tc in resp.tool_calls:
+                    tool_name = tc.get("name") or tc.get("function", {}).get("name", "")
+                    raw_args = tc.get("arguments") or tc.get("function", {}).get("arguments", "{}")
+                    try:
+                        tool_args: dict[str, Any] = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                    except json.JSONDecodeError:
+                        tool_args = {"input": raw_args}
 
-            if not has_tool_call:
-                return AgentResponse(output=text, steps=steps, tokens_used=total_tokens)
-
-            for tool_name, tool_obj in self.tools.items():
-                if tool_name in text:
-                    step = AgentStep(action=tool_name)
-                    observation = await self._call_tool(tool_name, {})
+                    step = AgentStep(action=tool_name, action_input=tool_args)
+                    observation = await self._call_tool(tool_name, tool_args)
                     step.observation = observation
                     steps.append(step)
+                    all_tool_calls.append({"tool": tool_name, "args": tool_args, "result": observation})
+
+                    messages.append({"role": "assistant", "content": resp.text or "", "tool_calls": resp.tool_calls})
+                    messages.append({"role": "tool", "content": observation, "tool_call_id": tc.get("id", "")})
+                continue
+
+            # --- Text-fallback path (LLMs that don't emit structured tool_calls) ---
+            text = resp.text
+            matched = False
+            for tool_name in self.tools:
+                if tool_name in text:
+                    try:
+                        after = text.split(tool_name, 1)[1]
+                        tool_args = json.loads(after[after.find("{"):after.find("}") + 1])
+                    except (json.JSONDecodeError, ValueError):
+                        tool_args = {}
+                    step = AgentStep(action=tool_name, action_input=tool_args)
+                    observation = await self._call_tool(tool_name, tool_args)
+                    step.observation = observation
+                    steps.append(step)
+                    all_tool_calls.append({"tool": tool_name, "args": tool_args, "result": observation})
                     messages.append({"role": "assistant", "content": text})
                     messages.append({"role": "user", "content": f"Tool result: {observation}"})
+                    matched = True
                     break
 
-        return AgentResponse(output="Max iterations reached.", steps=steps, tokens_used=total_tokens)
+            if not matched:
+                return AgentResponse(
+                    output=text,
+                    steps=steps,
+                    tokens_used=total_tokens,
+                    tool_calls=all_tool_calls,
+                )
+
+        return AgentResponse(output="Max iterations reached.", steps=steps, tokens_used=total_tokens, tool_calls=all_tool_calls)
 
 
 class StructuredOutputAgent(BaseAgent):
-    """Agent that always returns structured (JSON) output."""
+    """Agent that always returns structured (JSON) output, with optional Pydantic validation."""
 
     async def run(self, query: str, **kwargs: Any) -> AgentResponse:
         output_schema = kwargs.get("output_schema", {"answer": "string", "confidence": "float"})
+
+        # Build schema description for the prompt
+        is_pydantic = (
+            _PydanticBaseModel is not None
+            and isinstance(output_schema, type)
+            and issubclass(output_schema, _PydanticBaseModel)
+        )
+        if is_pydantic:
+            schema_str = json.dumps(output_schema.model_json_schema(), indent=2)
+        else:
+            schema_str = json.dumps(output_schema, indent=2)
+
         prompt = (
             f"Answer the following and respond ONLY with valid JSON matching this schema:\n"
-            f"{json.dumps(output_schema, indent=2)}\n\n{query}"
+            f"{schema_str}\n\n{query}"
         )
         resp = await self.llm.generate(prompt)
+        raw_text = resp.text
+
+        # Attempt to extract JSON from the response
+        try:
+            # Strip markdown fences if present
+            text = raw_text.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+
+        # Validate against Pydantic model if provided
+        validated_output = raw_text
+        if is_pydantic and parsed is not None:
+            try:
+                model_instance = output_schema(**parsed)  # type: ignore[operator]
+                validated_output = model_instance.model_dump_json()
+            except Exception:
+                validated_output = raw_text  # return raw if validation fails
+        elif parsed is not None:
+            validated_output = json.dumps(parsed)
+
         return AgentResponse(
-            output=resp.text,
+            output=validated_output,
             tokens_used=TokenUsage(
                 input=resp.usage.input,
                 output=resp.usage.output,
@@ -478,6 +587,24 @@ class OrchestrationResult:
     messages_exchanged: int = 0
     elapsed_seconds: float = 0.0
     cost_usd: float = 0.0
+    consensus: str = ""                              # populated by DEBATE mode
+    metadata: dict[str, Any] = field(default_factory=dict)  # mode-specific info
+
+    # ── Convenience aliases ──────────────────────────────────
+    @property
+    def results(self) -> dict[str, str]:
+        """Alias for agent_outputs — matches docs/UI usage."""
+        return self.agent_outputs
+
+    @property
+    def final_answer(self) -> str:
+        """Alias for output — matches docs/UI usage."""
+        return self.output
+
+    @property
+    def cost(self) -> float:
+        """Alias for cost_usd — matches docs/UI usage."""
+        return self.cost_usd
 
 
 class MultiAgentSystem:
@@ -492,11 +619,18 @@ class MultiAgentSystem:
         agents: list[AgentRole],
         *,
         coordination: str | CoordinationMode = "sequential",
+        mode: str | CoordinationMode | None = None,  # alias for coordination
         message_bus: MessageBus | None = None,
         max_rounds: int = 3,
+        rounds: int | None = None,  # alias for max_rounds
         cost_limit_usd: float | None = None,
         policy_check: Callable[[str, dict[str, Any]], bool] | None = None,
     ) -> None:
+        # Accept alias params
+        if mode is not None:
+            coordination = mode
+        if rounds is not None:
+            max_rounds = rounds
         self.agents = {a.name: a for a in agents}
         self.coordination = CoordinationMode(coordination) if isinstance(coordination, str) else coordination
         self.bus = message_bus or MessageBus()
@@ -572,7 +706,11 @@ class MultiAgentSystem:
 
         last = list(agent_outputs.values())[-1] if agent_outputs else ""
         return OrchestrationResult(
-            output=last, agent_outputs=agent_outputs, steps=all_steps, tokens_used=total_tokens,
+            output=last,
+            agent_outputs=agent_outputs,
+            steps=all_steps,
+            tokens_used=total_tokens,
+            metadata={"stages_completed": list(agent_outputs.keys())},
         )
 
     async def _run_parallel(self, query: str, **kwargs: Any) -> OrchestrationResult:
@@ -660,8 +798,17 @@ class MultiAgentSystem:
         )
 
         return OrchestrationResult(
-            output=synthesis.output, agent_outputs=agent_outputs,
-            steps=all_steps, tokens_used=total_tokens, conflict_resolution=conflict,
+            output=synthesis.output,
+            consensus=synthesis.output,
+            agent_outputs=agent_outputs,
+            steps=all_steps,
+            tokens_used=total_tokens,
+            conflict_resolution=conflict,
+            metadata={
+                "rounds_completed": self.max_rounds,
+                "agents": list(agent_outputs.keys()),
+                "synthesizer": first_agent.name,
+            },
         )
 
     async def _run_hierarchical(self, query: str, **kwargs: Any) -> OrchestrationResult:
@@ -717,8 +864,15 @@ class MultiAgentSystem:
         agent_outputs[f"{manager.name}_final"] = final.output
 
         return OrchestrationResult(
-            output=final.output, agent_outputs=agent_outputs,
-            steps=all_steps, tokens_used=total_tokens,
+            output=final.output,
+            agent_outputs=agent_outputs,
+            steps=all_steps,
+            tokens_used=total_tokens,
+            metadata={
+                "stages_completed": list(agent_outputs.keys()),
+                "manager": manager.name,
+                "workers": [w.name for w in workers],
+            },
         )
 
     async def _run_swarm(self, query: str, **kwargs: Any) -> OrchestrationResult:
@@ -755,8 +909,14 @@ class MultiAgentSystem:
 
         last = list(agent_outputs.values())[-1] if agent_outputs else ""
         return OrchestrationResult(
-            output=last, agent_outputs=agent_outputs,
-            steps=all_steps, tokens_used=total_tokens,
+            output=last,
+            agent_outputs=agent_outputs,
+            steps=all_steps,
+            tokens_used=total_tokens,
+            metadata={
+                "agents_activated": list(agent_outputs.keys()),
+                "routing": "domain_match" if any(r.domain for r in matched_agents) else "all",
+            },
         )
 
     async def _run_supervisor(self, query: str, **kwargs: Any) -> OrchestrationResult:
@@ -793,8 +953,15 @@ class MultiAgentSystem:
             if text.upper().startswith("DONE"):
                 final_answer = text[4:].strip()
                 return OrchestrationResult(
-                    output=final_answer, agent_outputs=agent_outputs,
-                    steps=all_steps, tokens_used=total_tokens,
+                    output=final_answer,
+                    agent_outputs=agent_outputs,
+                    steps=all_steps,
+                    tokens_used=total_tokens,
+                    metadata={
+                        "stages_completed": list(agent_outputs.keys()),
+                        "supervisor": supervisor.name,
+                        "rounds_completed": _round + 1,
+                    },
                 )
 
             # Parse CALL <worker>
@@ -816,8 +983,15 @@ class MultiAgentSystem:
         # Fallback synthesis
         merged = "\n".join(f"{n}: {o}" for n, o in agent_outputs.items())
         return OrchestrationResult(
-            output=merged, agent_outputs=agent_outputs,
-            steps=all_steps, tokens_used=total_tokens,
+            output=merged,
+            agent_outputs=agent_outputs,
+            steps=all_steps,
+            tokens_used=total_tokens,
+            metadata={
+                "stages_completed": list(agent_outputs.keys()),
+                "supervisor": agent_list[0].name,
+                "rounds_completed": _round + 1,
+            },
         )
 
     def get_run_log(self) -> list[dict[str, Any]]:
@@ -887,9 +1061,25 @@ class AgentPipelineBuilder:
         ))
         return self
 
+    def add_stage(
+        self,
+        name: str,
+        agent: BaseAgent,
+        *,
+        role_description: str = "",
+        priority: int = 0,
+        domain: str = "",
+    ) -> AgentPipelineBuilder:
+        """Alias for add_agent — pipeline-stage oriented naming."""
+        return self.add_agent(name, agent, role_description=role_description, priority=priority, domain=domain)
+
     def with_coordination(self, mode: str | CoordinationMode) -> AgentPipelineBuilder:
         self._coordination = CoordinationMode(mode) if isinstance(mode, str) else mode
         return self
+
+    def with_mode(self, mode: str | CoordinationMode) -> AgentPipelineBuilder:
+        """Alias for with_coordination."""
+        return self.with_coordination(mode)
 
     def with_max_rounds(self, rounds: int) -> AgentPipelineBuilder:
         self._max_rounds = rounds

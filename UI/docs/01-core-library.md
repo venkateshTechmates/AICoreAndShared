@@ -470,11 +470,11 @@ class SQLQueryTool(Tool):
     async def run(self, query: str, database: str = "analytics") -> str:
         ...
 
-# ── Create agent ──
-agent = AgentExecutor(
-    llm="gpt-4o",
-    tools=ToolRegistry.get_all(),
-    agent_type=AgentType.REACT,          # react | plan_execute | reflexion | function_call | structured
+# ── Create agent via factory ──
+agent = AgentExecutor.create(
+    AgentType.REACT,                     # react | plan_execute | reflexion | function_call | structured
+    llm=llm,
+    tools=[ToolRegistry.get("web_search"), ToolRegistry.get("sql_query")],
     max_iterations=10,
     verbose=True,
 )
@@ -486,7 +486,61 @@ print(result.tool_calls)    # Tool invocations
 print(result.tokens_used)   # Total token consumption
 ```
 
+### FunctionCallAgent — Structured Tool Schema
+
+Uses OpenAI-style function-calling API (structured `tool_calls`) with a text-parsing fallback for models that don't emit `tool_calls` natively:
+
+```python
+from ai_core.schemas import AgentType
+
+fc_agent = AgentExecutor.create(
+    AgentType.FUNCTION_CALL,
+    llm=llm,
+    tools=[ToolRegistry.get("web_search"), ToolRegistry.get("sql_query")],
+)
+result = await fc_agent.run("How many orders shipped last week?")
+# result.tool_calls — list of {"tool": ..., "args": {...}, "result": "..."}
+for tc in result.tool_calls:
+    print(f"Called {tc['tool']}({tc['args']}) → {tc['result']}")
+```
+
+### StructuredOutputAgent — Pydantic Validation
+
+Prompts the LLM to return JSON, then validates the response against an optional Pydantic model:
+
+```python
+from pydantic import BaseModel
+from ai_core.schemas import AgentType
+
+class RiskAssessment(BaseModel):
+    risk_level: str          # low | medium | high | critical
+    confidence: float        # 0.0–1.0
+    factors: list[str]
+    recommendation: str
+
+s_agent = AgentExecutor.create(AgentType.STRUCTURED, llm=llm)
+result = await s_agent.run(
+    "Assess the credit risk for applicant ID A-2024-001.",
+    output_schema=RiskAssessment,
+)
+print(result.output)   # validated JSON string from RiskAssessment.model_dump_json()
+```
+
+### BaseAgent — Built-in Retry
+
+All agents inherit `_call_llm_with_retry()` for resilient LLM calls with exponential backoff:
+
+```python
+# Used internally; also available in custom agents
+response = await self._call_llm_with_retry(
+    prompt_or_messages,
+    max_retries=3,       # default 3
+    initial_delay=1.0,   # seconds; doubles each retry (1 s → 2 s → 4 s)
+)
+```
+
 ### Six Coordination Modes
+
 
 ```python
 from ai_core.agents import MultiAgentSystem

@@ -279,8 +279,9 @@ memory = EntityMemory(
 )
 
 # ── Usage with agents ──
-agent = AgentExecutor(
-    llm="gpt-4o",
+agent = AgentExecutor.create(
+    AgentType.REACT,
+    llm=llm,
     tools=[...],
     memory=memory,
 )
