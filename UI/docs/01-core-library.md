@@ -740,16 +740,15 @@ server.run(transport="stdio")
 ### RAG Evaluation
 
 ```python
-from ai_core.eval import EvalSuite, RAGEvaluator, MetricConfig
+from ai_core.eval import RAGEvaluator, RAGASEvaluator, DeepEvalEvaluator, PipelineEvaluator
 
+# ── Standard RAG Evaluator ──
 evaluator = RAGEvaluator(
     metrics=[
         "faithfulness",          # Is the answer grounded in context?
         "answer_relevancy",      # Is the answer relevant to the question?
         "context_recall",        # Were relevant docs retrieved?
         "context_precision",     # Are retrieved docs relevant?
-        "harmfulness",           # Safety check
-        "hallucination",         # Fabrication detection
     ],
     llm_judge="gpt-4o",
     batch_size=50,
@@ -762,29 +761,232 @@ report = await evaluator.evaluate(
     ground_truth=golden_answers,
 )
 
-# Access metrics
-print(report.summary())
-# ┌──────────────────────┬────────┐
-# │ Metric               │ Score  │
-# ├──────────────────────┼────────┤
-# │ Faithfulness         │ 0.92   │
-# │ Answer Relevancy     │ 0.89   │
-# │ Context Recall       │ 0.87   │
-# │ Context Precision    │ 0.91   │
-# │ Harmfulness          │ 0.01   │
-# │ Hallucination Rate   │ 0.04   │
-# └──────────────────────┴────────┘
+# Access metrics — .summary() returns dict[str, float]
+scores = report.summary()
+# {
+#   "faithfulness": 0.92,
+#   "answer_relevancy": 0.89,
+#   "context_recall": 0.87,
+#   "context_precision": 0.91,
+# }
 
-report.save("eval_results.json")
-report.export_html("eval_report.html")
+# ── RAGAS integration ──
+ragas_evaluator = RAGASEvaluator(
+    metrics=["faithfulness", "answer_relevancy", "context_recall"],
+    llm="gpt-4o",
+)
+report = await ragas_evaluator.evaluate(dataset=eval_dataset)
+
+# ── DeepEval integration ──
+deepeval_evaluator = DeepEvalEvaluator(
+    metrics=["GEval", "Faithfulness", "HallucinationMetric"],
+    model="gpt-4o",
+)
+report = await deepeval_evaluator.evaluate(test_cases=test_cases)
+
+# ── Pipeline Evaluator (end-to-end) ──
+pipeline_evaluator = PipelineEvaluator(
+    pipeline=rag_pipeline,
+    metrics=["faithfulness", "latency_p50", "latency_p99", "cost"],
+)
+report = await pipeline_evaluator.run(test_set)
+print(report.summary())  # dict[str, float]
 ```
 
 ### Supported Evaluation Frameworks
 
-| Framework | Focus | Integration Level |
-|---|---|---|
-| RAGAS | RAG-specific metrics | Full |
-| DeepEval | Comprehensive LLM eval | Full |
-| TruLens | Feedback & tracing | Full |
-| UpTrain | Data quality + eval | Adapter |
-| Custom | User-defined metrics | Plugin API |
+| Framework | Class | Focus | Integration Level |
+|---|---|---|---|
+| RAGAS | `RAGASEvaluator` | RAG-specific metrics | Full |
+| DeepEval | `DeepEvalEvaluator` | Comprehensive LLM eval | Full |
+| Custom | `RAGEvaluator` | User-defined metrics | Built-in |
+| Pipeline | `PipelineEvaluator` | End-to-end quality | Built-in |
+
+---
+
+## 9. Deployment & Geo-Routing (`ai_core.deployment`)
+
+Enterprise-grade geo-routing, edge deployment, and hybrid cloud orchestration.
+
+### Geo-Routing
+
+```python
+from ai_core.deployment import GeoRouter, RoutingStrategy, EdgeDeployment
+
+# ── Geo-aware router ──
+router = GeoRouter(
+    strategy=RoutingStrategy.LATENCY,   # LATENCY | COST | COMPLIANCE | ROUND_ROBIN
+    regions=[
+        {"name": "us-east-1", "provider": "openai", "model": "gpt-4o"},
+        {"name": "eu-west-1", "provider": "azure", "model": "gpt-4-turbo"},
+        {"name": "ap-southeast-1", "provider": "anthropic", "model": "claude-3-sonnet"},
+    ],
+)
+
+# Route by client location
+endpoint = await router.route(request, client_region="eu-west-1")
+response = await endpoint.llm.generate(request.prompt)
+```
+
+### Edge Deployment
+
+```python
+from ai_core.deployment import EdgeDeployment, ReplicationStrategy
+
+# Deploy models to edge nodes
+edge = EdgeDeployment(
+    node_id="edge-node-1",
+    region="us-west-2",
+    replication=ReplicationStrategy.ACTIVE_ACTIVE,
+    models=["llama-3-8b", "nomic-embed-text"],
+    max_concurrent=100,
+)
+
+await edge.deploy()
+response = await edge.infer(prompt="Analyze this document...")
+health = await edge.health_check()
+# {"status": "healthy", "latency_p99_ms": 45, "models": ["llama-3-8b", ...]}
+```
+
+### Hybrid Cloud Manager
+
+```python
+from ai_core.deployment import HybridCloudManager, Consistency
+
+# Manage workload distribution across cloud providers
+manager = HybridCloudManager(
+    primary="azure",
+    fallback="aws",
+    consistency=Consistency.EVENTUAL,
+    cost_threshold_usd_per_day=500.0,
+)
+
+# Auto-routes: compliance data → on-prem, burst → cloud
+result = await manager.execute(task, data_classification="confidential")
+
+# Get cost breakdown
+report = manager.cost_report()
+# {"azure": 240.50, "aws": 85.20, "on_prem": 12.30, "total": 338.00}
+```
+
+### Deployment Orchestrator
+
+```python
+from ai_core.deployment import DeploymentOrchestrator
+
+# Full orchestration of multi-region pipeline deployment
+orchestrator = DeploymentOrchestrator(
+    geo_router=router,
+    edge_nodes=[edge_us, edge_eu, edge_ap],
+    cloud_manager=manager,
+)
+
+# Deploy a new pipeline version with zero downtime
+await orchestrator.rolling_deploy(
+    pipeline=my_pipeline,
+    strategy="blue_green",
+    health_check_interval=30,
+    rollback_on_failure=True,
+)
+```
+
+---
+
+## 10. Recovery & Disaster Recovery (`ai_core.recovery`)
+
+Enterprise-grade failover, backup, DR testing, and chaos engineering.
+
+### Failover Chain
+
+```python
+from ai_core.recovery import FailoverChain
+
+# Chain of fallback LLM providers
+chain = FailoverChain(
+    steps=[
+        {"provider": "openai",    "model": "gpt-4o"},
+        {"provider": "anthropic", "model": "claude-3-sonnet"},
+        {"provider": "azure",     "model": "gpt-4-turbo"},
+        {"provider": "ollama",    "model": "llama3"},          # last resort: local
+    ],
+    timeout_per_step=10.0,
+    on_failure="next",    # next | raise | return_empty
+)
+
+response = await chain.execute(prompt="Summarize this document...")
+print(response.used_step)   # Which provider/model actually responded
+```
+
+### Backup Manager
+
+```python
+from ai_core.recovery import BackupManager
+
+backup = BackupManager(
+    storage_backend="s3",
+    bucket="my-ai-backups",
+    encryption=True,
+    retention_days=90,
+    schedule="0 2 * * *",     # 2am daily via cron
+)
+
+# Backup vector store
+await backup.backup_vectorstore(store=qdrant_store, namespace="enterprise_kb")
+
+# Backup conversation memory
+await backup.backup_memory(memory=redis_memory, user_ids=active_users)
+
+# Restore from backup
+await backup.restore(
+    backup_id="backup-2024-01-15-020000",
+    target=qdrant_store,
+    dry_run=True,
+)
+```
+
+### Disaster Recovery Testing
+
+```python
+from ai_core.recovery import DRTest
+
+dr = DRTest(
+    pipeline=production_pipeline,
+    backup_manager=backup,
+    failover_chain=chain,
+)
+
+# Run DR drill
+results = await dr.run_drill(
+    scenarios=["provider_outage", "network_partition", "data_corruption"],
+    target_rto_seconds=30,    # Recovery Time Objective
+    target_rpo_seconds=300,   # Recovery Point Objective
+)
+
+for scenario in results:
+    print(f"{scenario.name}: RTO={scenario.actual_rto}s RPO={scenario.actual_rpo}s PASSED={scenario.passed}")
+```
+
+### Chaos Engineering
+
+```python
+from ai_core.recovery import ChaosEngineering
+
+chaos = ChaosEngineering(
+    pipeline=my_pipeline,
+    safe_mode=True,              # Prevent production impact
+)
+
+# Inject failures to test resilience
+await chaos.inject_latency(target="llm", delay_ms=2000, probability=0.3)
+await chaos.inject_error(target="vectorstore", error_type="timeout", probability=0.1)
+await chaos.inject_outage(target="openai", duration_seconds=60)
+
+# Run a full chaos experiment
+report = await chaos.run_experiment(
+    name="LLM Provider Resilience",
+    duration_seconds=300,
+    failure_rate=0.2,
+)
+print(report.summary())
+# {"availability": 0.994, "p99_latency_ms": 3200, "failover_success_rate": 1.0}
+```
