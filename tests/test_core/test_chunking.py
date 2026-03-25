@@ -74,14 +74,14 @@ class TestFixedSizeChunker:
     def test_chunk_size_respected(self):
         chunks = chunk(ChunkingStrategy.FIXED, LONG_TEXT, chunk_size=100, chunk_overlap=0)
         for c in chunks:
-            assert len(c.content) <= 120  # allow small overrun at word boundary
+            assert len(c.text) <= 120  # allow small overrun at word boundary
 
     def test_overlap_positive(self):
         chunks_no_overlap = chunk(ChunkingStrategy.FIXED, LONG_TEXT, chunk_size=100, chunk_overlap=0)
         chunks_overlap = chunk(ChunkingStrategy.FIXED, LONG_TEXT, chunk_size=100, chunk_overlap=20)
         # With overlap, more total content (some text repeated)
-        total_no = sum(len(c.content) for c in chunks_no_overlap)
-        total_ov = sum(len(c.content) for c in chunks_overlap)
+        total_no = sum(len(c.text) for c in chunks_no_overlap)
+        total_ov = sum(len(c.text) for c in chunks_overlap)
         assert total_ov > total_no
 
     def test_empty_text_returns_empty(self):
@@ -102,14 +102,14 @@ class TestRecursiveChunker:
 
     def test_all_chunks_non_empty(self):
         chunks = chunk(ChunkingStrategy.RECURSIVE, LONG_TEXT, chunk_size=200)
-        assert all(len(c.content.strip()) > 0 for c in chunks)
+        assert all(len(c.text.strip()) > 0 for c in chunks)
 
     def test_metadata_attached(self):
         config = ChunkingConfig(strategy=ChunkingStrategy.RECURSIVE)
         engine_chunks = ChunkingEngine.chunk(MEDIUM_TEXT, ChunkingStrategy.RECURSIVE, config)
         for c in engine_chunks:
             assert hasattr(c, "metadata")
-            assert hasattr(c, "chunk_index")
+            assert hasattr(c, "index")
 
 
 # ── Semantic ──────────────────────────────────────────────────────────────────
@@ -121,7 +121,7 @@ class TestSemanticChunker:
 
     def test_content_preserved(self):
         chunks = chunk(ChunkingStrategy.SEMANTIC, MEDIUM_TEXT)
-        combined = " ".join(c.content for c in chunks)
+        combined = " ".join(c.text for c in chunks)
         # All words from original text should appear in the combined output
         original_words = set(MEDIUM_TEXT.lower().split())
         combined_words = set(combined.lower().split())
@@ -151,7 +151,7 @@ class TestDocumentAwareChunker:
 
     def test_content_completeness(self):
         chunks = chunk(ChunkingStrategy.DOCUMENT_AWARE, MARKDOWN_TEXT)
-        combined = "\n".join(c.content for c in chunks)
+        combined = "\n".join(c.text for c in chunks)
         assert "Introduction" in combined
         assert "Methodology" in combined
 
@@ -163,8 +163,8 @@ class TestSlidingWindowChunker:
         chunks = chunk(ChunkingStrategy.SLIDING_WINDOW, MEDIUM_TEXT, chunk_size=50, chunk_overlap=10)
         if len(chunks) > 1:
             # First word of chunk[1] should appear in chunk[0] (due to overlap)
-            first_word_c1 = chunks[1].content.split()[0]
-            assert first_word_c1 in chunks[0].content
+            first_word_c1 = chunks[1].text.split()[0]
+            assert first_word_c1 in chunks[0].text
 
 
 # ── Paragraph ─────────────────────────────────────────────────────────────────
@@ -189,7 +189,7 @@ class TestCodeAwareChunker:
 
     def test_python_class_preserved(self):
         chunks = chunk(ChunkingStrategy.CODE_AWARE, CODE_TEXT)
-        combined = "\n".join(c.content for c in chunks)
+        combined = "\n".join(c.text for c in chunks)
         assert "DataProcessor" in combined
 
 

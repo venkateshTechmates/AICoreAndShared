@@ -443,6 +443,10 @@ few_shot_prompt = selector.select_and_render(query=user_input)
 
 ## 6. Agentic AI Framework (`ai_core.agents`)
 
+### Overview
+
+The v1.1.0 agents module provides a complete enterprise multi-agent orchestration system built on six coordination modes, a pub/sub `MessageBus`, fluent `AgentPipelineBuilder`, and a rich `OrchestrationResult` schema.
+
 ### Agent Types & Tool Registry
 
 ```python
@@ -455,7 +459,6 @@ class WebSearchTool(Tool):
     description = "Search the web for current information"
     
     async def run(self, query: str) -> str:
-        # Implementation
         ...
 
 @ToolRegistry.register
@@ -473,37 +476,149 @@ agent = AgentExecutor(
     tools=ToolRegistry.get_all(),
     agent_type=AgentType.REACT,          # react | plan_execute | reflexion | function_call | structured
     max_iterations=10,
-    memory=ConversationBufferMemory(),
     verbose=True,
 )
 
 result = await agent.run("Research and summarize AI trends in 2026")
 print(result.output)
-print(result.steps)                     # Reasoning trace
-print(result.tool_calls)               # Tool invocations
-print(result.tokens_used)             # Total token consumption
+print(result.steps)         # Reasoning trace
+print(result.tool_calls)    # Tool invocations
+print(result.tokens_used)   # Total token consumption
 ```
 
-### Multi-Agent Systems
+### Six Coordination Modes
 
 ```python
-from ai_core.agents import MultiAgentSystem, AgentRole
+from ai_core.agents import MultiAgentSystem
+from ai_core.schemas import CoordinationMode
 
+# ── 1. Sequential — one agent at a time, output chains forward ──
 system = MultiAgentSystem(
-    agents=[
-        AgentRole(name="Researcher", llm="gpt-4o", tools=["web_search", "arxiv"]),
-        AgentRole(name="Analyst", llm="claude-3.5-sonnet", tools=["python", "sql"]),
-        AgentRole(name="Writer", llm="gpt-4o", tools=["markdown", "pdf_gen"]),
-    ],
-    coordination="hierarchical",         # hierarchical | sequential | swarm | debate
-    manager_llm="gpt-4o",
-    shared_memory=VectorMemory(store=vector_store),
+    agents=[research_agent, analysis_agent, writer_agent],
+    mode=CoordinationMode.SEQUENTIAL,
+)
+result = await system.run("Summarise the Q4 earnings report.")
+
+# ── 2. Parallel — all agents run concurrently, results fan in ──
+system = MultiAgentSystem(
+    agents=[pricing_agent, inventory_agent, fraud_agent, review_agent],
+    mode=CoordinationMode.PARALLEL,
+)
+result = await system.run("Evaluate order #ORD-2024-8821")
+
+# ── 3. Debate — structured critique over N rounds until consensus ──
+system = MultiAgentSystem(
+    agents=[bull_agent, bear_agent, moderator_agent],
+    mode=CoordinationMode.DEBATE,
+    rounds=3,
+)
+result = await system.run("Estimate fair value for property at 12 Oak Lane")
+print(result.consensus)
+
+# ── 4. Hierarchical — supervisor routes to specialist workers ──
+system = MultiAgentSystem(
+    agents=[supervisor_agent, triage_agent, specialist_agent],
+    mode=CoordinationMode.HIERARCHICAL,
+)
+result = await system.run("Process patient intake for cardiology")
+
+# ── 5. Swarm — agents share a collaborative workspace ──
+system = MultiAgentSystem(
+    agents=[extractor_agent, validator_agent, mapper_agent],
+    mode=CoordinationMode.SWARM,
+)
+result = await system.run("Build knowledge graph from the contract document")
+
+# ── 6. Supervisor — coordinator owns final decision authority ──
+system = MultiAgentSystem(
+    agents=[coordinator_agent, underwriter_agent, compliance_agent],
+    mode=CoordinationMode.SUPERVISOR,
+)
+result = await system.run("Process loan application #L-2024-5521")
+print(result.results['decision'])   # APPROVE | DENY | REFER
+```
+
+### Coordination Mode Reference
+
+| Mode | Pattern | Ideal For |
+|---|---|---|
+| `SEQUENTIAL` | A → B → C | Report generation, pipelines with data dependencies |
+| `PARALLEL` | A + B + C → merge | Intelligence gathering, risk scoring |
+| `DEBATE` | A ↔ B (N rounds) | Valuation, investment analysis, adversarial review |
+| `HIERARCHICAL` | Supervisor → workers | Medical triage, compliance workflows |
+| `SWARM` | Shared workspace | Knowledge graph construction, entity extraction |
+| `SUPERVISOR` | Coordinator → dynamic dispatch | Loan underwriting, multi-step approvals |
+
+### MessageBus
+
+All agents within a `MultiAgentSystem` share a `MessageBus` that provides topic-based pub/sub routing, dead-letter queues, and message history.
+
+```python
+from ai_core.agents import MessageBus, AgentMessage
+
+bus = MessageBus()
+
+# Publish a message to a topic
+await bus.publish(
+    topic="analysis.ready",
+    message=AgentMessage(
+        sender="AnalysisAgent",
+        content="Analysis complete: revenue up 12% YoY",
+        metadata={"confidence": 0.95},
+    ),
 )
 
-report = await system.execute(
-    task="Create a market analysis report for EV sector in India",
-    max_rounds=20,
+# Subscribe to a topic
+bus.subscribe("analysis.ready", callback=my_handler)
+
+# Inspect dead letters
+print(bus.dead_letters)
+
+# Full message history
+for msg in bus.history:
+    print(f"{msg.sender} → {msg.topic}: {msg.content[:50]}")
+```
+
+### AgentPipelineBuilder
+
+A fluent builder for composing multi-stage agent pipelines:
+
+```python
+from ai_core.agents import AgentPipelineBuilder
+from ai_core.schemas import CoordinationMode
+
+pipeline = (
+    AgentPipelineBuilder()
+    .add_stage("intake",    intake_agent)
+    .add_stage("analyse",   analysis_agent)
+    .add_stage("report",    writer_agent)
+    .with_mode(CoordinationMode.SEQUENTIAL)
+    .build()
 )
+
+result = await pipeline.run(
+    "Produce a compliance report for Q1 2025",
+    context={"department": "finance", "framework": "SOC2"},
+)
+
+print(result.final_answer)
+print(result.metadata['stages_completed'])
+print(result.cost)
+```
+
+### OrchestrationResult Schema
+
+```python
+@dataclass
+class OrchestrationResult:
+    task: str
+    mode: CoordinationMode
+    results: dict[str, Any]     # per-agent outputs keyed by agent name
+    consensus: str | None       # populated by DEBATE mode
+    final_answer: str
+    metadata: dict[str, Any]    # rounds_completed, stages, workspace state, etc.
+    cost: float                 # total $ across all agent calls
+    duration_ms: float
 ```
 
 ---

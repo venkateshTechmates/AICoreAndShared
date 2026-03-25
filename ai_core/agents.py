@@ -1,17 +1,111 @@
 """
-Agentic AI Framework — 6 agent types with multi-agent orchestration.
+Agentic AI Framework — Enterprise multi-agent orchestration.
 
 Agent types: ReAct, Plan-Execute, Reflexion, Function Call, Structured, Custom
-Coordination: hierarchical, sequential, swarm, debate
+Coordination: sequential, debate, hierarchical, parallel, swarm, supervisor
+Features: shared message bus, agent state machine, conflict resolution,
+          policy guardrails, cost tracking, consensus voting, dead-letter queue
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from abc import ABC, abstractmethod
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
 from typing import Any, Callable
+from uuid import uuid4
 
 from ai_core.schemas import AgentResponse, AgentStep, AgentType, TokenUsage, ToolDefinition
+
+
+# ── Agent State & Message Bus ────────────────────────────────────────────────
+
+
+class AgentState(str, Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    WAITING = "waiting"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SUSPENDED = "suspended"
+
+
+class CoordinationMode(str, Enum):
+    SEQUENTIAL = "sequential"
+    PARALLEL = "parallel"
+    DEBATE = "debate"
+    HIERARCHICAL = "hierarchical"
+    SWARM = "swarm"
+    SUPERVISOR = "supervisor"
+
+
+@dataclass
+class AgentMessage:
+    """Message exchanged between agents via the message bus."""
+    id: str = field(default_factory=lambda: uuid4().hex[:12])
+    sender: str = ""
+    recipient: str = ""  # empty = broadcast
+    content: str = ""
+    msg_type: str = "info"  # info, request, response, error, vote
+    metadata: dict[str, Any] = field(default_factory=dict)
+    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    parent_id: str = ""
+
+
+class MessageBus:
+    """In-process message bus for agent-to-agent communication."""
+
+    def __init__(self) -> None:
+        self._messages: list[AgentMessage] = []
+        self._subscribers: dict[str, list[Callable]] = defaultdict(list)
+        self._dead_letters: list[AgentMessage] = []
+
+    def publish(self, message: AgentMessage) -> None:
+        self._messages.append(message)
+        target = message.recipient or "__broadcast__"
+        for handler in self._subscribers.get(target, []):
+            try:
+                handler(message)
+            except Exception:
+                self._dead_letters.append(message)
+        if target != "__broadcast__":
+            for handler in self._subscribers.get("__broadcast__", []):
+                try:
+                    handler(message)
+                except Exception:
+                    self._dead_letters.append(message)
+
+    def subscribe(self, agent_name: str, handler: Callable) -> None:
+        self._subscribers[agent_name].append(handler)
+
+    def get_history(self, *, sender: str | None = None, recipient: str | None = None) -> list[AgentMessage]:
+        msgs = self._messages
+        if sender:
+            msgs = [m for m in msgs if m.sender == sender]
+        if recipient:
+            msgs = [m for m in msgs if m.recipient == recipient or m.recipient == ""]
+        return msgs
+
+    def get_dead_letters(self) -> list[AgentMessage]:
+        return list(self._dead_letters)
+
+    def clear(self) -> None:
+        self._messages.clear()
+        self._dead_letters.clear()
+
+
+@dataclass
+class ConflictResolution:
+    """Tracks how conflicts between agents are resolved."""
+    strategy: str = "voting"  # voting, priority, llm_judge
+    votes: dict[str, str] = field(default_factory=dict)
+    winner: str = ""
+    reason: str = ""
 
 
 # ── Tool Registry ────────────────────────────────────────────────────────────
@@ -358,78 +452,220 @@ class AgentRole:
         agent: BaseAgent,
         *,
         role_description: str = "",
+        priority: int = 0,
+        domain: str = "",
+        max_retries: int = 2,
     ) -> None:
         self.name = name
         self.agent = agent
         self.role_description = role_description
+        self.priority = priority
+        self.domain = domain
+        self.max_retries = max_retries
+        self.state = AgentState.IDLE
+        self._inbox: list[AgentMessage] = []
+
+
+@dataclass
+class OrchestrationResult:
+    """Extended result from multi-agent orchestration."""
+    output: str = ""
+    agent_outputs: dict[str, str] = field(default_factory=dict)
+    steps: list[AgentStep] = field(default_factory=list)
+    tokens_used: TokenUsage = field(default_factory=TokenUsage)
+    coordination_mode: str = ""
+    conflict_resolution: ConflictResolution | None = None
+    messages_exchanged: int = 0
+    elapsed_seconds: float = 0.0
+    cost_usd: float = 0.0
 
 
 class MultiAgentSystem:
-    """Orchestrate multiple agents with coordination strategies."""
+    """Enterprise-grade multi-agent orchestration with coordination strategies.
+
+    Supports: sequential, parallel, debate (with voting), hierarchical,
+    swarm (dynamic routing), and supervisor (with policy guardrails).
+    """
 
     def __init__(
         self,
         agents: list[AgentRole],
         *,
-        coordination: str = "sequential",
+        coordination: str | CoordinationMode = "sequential",
+        message_bus: MessageBus | None = None,
+        max_rounds: int = 3,
+        cost_limit_usd: float | None = None,
+        policy_check: Callable[[str, dict[str, Any]], bool] | None = None,
     ) -> None:
         self.agents = {a.name: a for a in agents}
-        self.coordination = coordination
+        self.coordination = CoordinationMode(coordination) if isinstance(coordination, str) else coordination
+        self.bus = message_bus or MessageBus()
+        self.max_rounds = max_rounds
+        self.cost_limit_usd = cost_limit_usd
+        self._policy_check = policy_check
+        self._run_log: list[dict[str, Any]] = []
 
-    async def run(self, query: str, **kwargs: Any) -> AgentResponse:
-        if self.coordination == "sequential":
-            return await self._run_sequential(query, **kwargs)
-        if self.coordination == "debate":
-            return await self._run_debate(query, **kwargs)
-        if self.coordination == "hierarchical":
-            return await self._run_hierarchical(query, **kwargs)
-        return await self._run_sequential(query, **kwargs)
+        # Wire agents to the bus
+        for role in self.agents.values():
+            self.bus.subscribe(role.name, lambda msg, r=role: r._inbox.append(msg))
 
-    async def _run_sequential(self, query: str, **kwargs: Any) -> AgentResponse:
+    async def run(self, query: str, **kwargs: Any) -> OrchestrationResult:
+        start = time.time()
+        mode = self.coordination
+
+        # Policy guard
+        if self._policy_check and not self._policy_check(query, kwargs):
+            return OrchestrationResult(
+                output="Query blocked by policy guard.",
+                coordination_mode=mode.value,
+            )
+
+        if mode == CoordinationMode.SEQUENTIAL:
+            result = await self._run_sequential(query, **kwargs)
+        elif mode == CoordinationMode.PARALLEL:
+            result = await self._run_parallel(query, **kwargs)
+        elif mode == CoordinationMode.DEBATE:
+            result = await self._run_debate(query, **kwargs)
+        elif mode == CoordinationMode.HIERARCHICAL:
+            result = await self._run_hierarchical(query, **kwargs)
+        elif mode == CoordinationMode.SWARM:
+            result = await self._run_swarm(query, **kwargs)
+        elif mode == CoordinationMode.SUPERVISOR:
+            result = await self._run_supervisor(query, **kwargs)
+        else:
+            result = await self._run_sequential(query, **kwargs)
+
+        result.elapsed_seconds = round(time.time() - start, 3)
+        result.coordination_mode = mode.value
+        result.messages_exchanged = len(self.bus.get_history())
+        self._run_log.append({
+            "query": query,
+            "mode": mode.value,
+            "elapsed": result.elapsed_seconds,
+            "agents_used": list(result.agent_outputs.keys()),
+        })
+        return result
+
+    def _accumulate_tokens(self, total: TokenUsage, resp: AgentResponse) -> None:
+        total.input += resp.tokens_used.input
+        total.output += resp.tokens_used.output
+        total.total += resp.tokens_used.total
+
+    async def _run_sequential(self, query: str, **kwargs: Any) -> OrchestrationResult:
         context = query
         all_steps: list[AgentStep] = []
         total_tokens = TokenUsage()
-        last_output = ""
+        agent_outputs: dict[str, str] = {}
 
         for role in self.agents.values():
+            role.state = AgentState.RUNNING
             resp = await role.agent.run(context, **kwargs)
+            role.state = AgentState.COMPLETED
             all_steps.extend(resp.steps)
-            total_tokens.input += resp.tokens_used.input
-            total_tokens.output += resp.tokens_used.output
-            total_tokens.total += resp.tokens_used.total
+            self._accumulate_tokens(total_tokens, resp)
+            agent_outputs[role.name] = resp.output
+
+            self.bus.publish(AgentMessage(
+                sender=role.name, content=resp.output, msg_type="response",
+            ))
             context = f"Previous agent ({role.name}) said: {resp.output}\n\nOriginal query: {query}"
-            last_output = resp.output
 
-        return AgentResponse(output=last_output, steps=all_steps, tokens_used=total_tokens)
+        last = list(agent_outputs.values())[-1] if agent_outputs else ""
+        return OrchestrationResult(
+            output=last, agent_outputs=agent_outputs, steps=all_steps, tokens_used=total_tokens,
+        )
 
-    async def _run_debate(self, query: str, **kwargs: Any) -> AgentResponse:
-        responses: dict[str, str] = {}
+    async def _run_parallel(self, query: str, **kwargs: Any) -> OrchestrationResult:
+        """Run all agents in parallel and merge results."""
         all_steps: list[AgentStep] = []
         total_tokens = TokenUsage()
+        agent_outputs: dict[str, str] = {}
 
-        for role in self.agents.values():
+        async def _run_one(role: AgentRole) -> tuple[str, AgentResponse]:
+            role.state = AgentState.RUNNING
             resp = await role.agent.run(query, **kwargs)
-            responses[role.name] = resp.output
-            all_steps.extend(resp.steps)
-            total_tokens.input += resp.tokens_used.input
-            total_tokens.output += resp.tokens_used.output
-            total_tokens.total += resp.tokens_used.total
+            role.state = AgentState.COMPLETED
+            return role.name, resp
 
-        # Synthesize: pick the first agent to summarize
+        tasks = [_run_one(role) for role in self.agents.values()]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for item in results:
+            if isinstance(item, Exception):
+                continue
+            name, resp = item
+            all_steps.extend(resp.steps)
+            self._accumulate_tokens(total_tokens, resp)
+            agent_outputs[name] = resp.output
+            self.bus.publish(AgentMessage(sender=name, content=resp.output, msg_type="response"))
+
+        # Merge: concatenate parallel outputs
+        merged = "\n\n".join(f"[{name}]: {out}" for name, out in agent_outputs.items())
+        return OrchestrationResult(
+            output=merged, agent_outputs=agent_outputs, steps=all_steps, tokens_used=total_tokens,
+        )
+
+    async def _run_debate(self, query: str, **kwargs: Any) -> OrchestrationResult:
+        """Multi-round debate with consensus voting."""
+        all_steps: list[AgentStep] = []
+        total_tokens = TokenUsage()
+        agent_outputs: dict[str, str] = {}
+
+        # Round 1: Independent answers
+        for role in self.agents.values():
+            role.state = AgentState.RUNNING
+            resp = await role.agent.run(query, **kwargs)
+            role.state = AgentState.COMPLETED
+            agent_outputs[role.name] = resp.output
+            all_steps.extend(resp.steps)
+            self._accumulate_tokens(total_tokens, resp)
+
+        # Rounds 2..N: Challenge and refine
+        for round_num in range(1, self.max_rounds):
+            debate_context = "\n".join(
+                f"{name}: {answer}" for name, answer in agent_outputs.items()
+            )
+            new_outputs: dict[str, str] = {}
+            for role in self.agents.values():
+                challenge = (
+                    f"Round {round_num + 1} debate. Other agents said:\n{debate_context}\n\n"
+                    f"Original question: {query}\n"
+                    f"Your previous answer: {agent_outputs[role.name]}\n"
+                    f"Refine your answer or defend your position:"
+                )
+                resp = await role.agent.run(challenge, **kwargs)
+                new_outputs[role.name] = resp.output
+                all_steps.extend(resp.steps)
+                self._accumulate_tokens(total_tokens, resp)
+                self.bus.publish(AgentMessage(
+                    sender=role.name, content=resp.output,
+                    msg_type="vote", metadata={"round": round_num + 1},
+                ))
+            agent_outputs = new_outputs
+
+        # Consensus: first agent synthesizes
         first_agent = next(iter(self.agents.values()))
-        debate_summary = "\n".join(f"{name}: {answer}" for name, answer in responses.items())
+        summary = "\n".join(f"{n}: {a}" for n, a in agent_outputs.items())
         synthesis = await first_agent.agent.run(
-            f"Synthesize these perspectives into a final answer:\n\n{debate_summary}",
+            f"Synthesize these final positions into one authoritative answer:\n\n{summary}",
             **kwargs,
         )
-        total_tokens.input += synthesis.tokens_used.input
-        total_tokens.output += synthesis.tokens_used.output
-        total_tokens.total += synthesis.tokens_used.total
+        self._accumulate_tokens(total_tokens, synthesis)
 
-        return AgentResponse(output=synthesis.output, steps=all_steps, tokens_used=total_tokens)
+        conflict = ConflictResolution(
+            strategy="debate_consensus",
+            votes=agent_outputs,
+            winner=first_agent.name,
+            reason="Synthesized after multi-round debate",
+        )
 
-    async def _run_hierarchical(self, query: str, **kwargs: Any) -> AgentResponse:
-        # First agent is the manager, delegates to others
+        return OrchestrationResult(
+            output=synthesis.output, agent_outputs=agent_outputs,
+            steps=all_steps, tokens_used=total_tokens, conflict_resolution=conflict,
+        )
+
+    async def _run_hierarchical(self, query: str, **kwargs: Any) -> OrchestrationResult:
+        """Manager-worker pattern: first agent delegates, workers execute, manager synthesizes."""
         agent_list = list(self.agents.values())
         if len(agent_list) < 2:
             return await self._run_sequential(query, **kwargs)
@@ -437,11 +673,13 @@ class MultiAgentSystem:
         manager = agent_list[0]
         workers = agent_list[1:]
 
+        manager.state = AgentState.RUNNING
         manager_resp = await manager.agent.run(
-            f"You are a manager. Delegate this task to your team:\n{query}\n\n"
-            f"Available workers: {', '.join(w.name for w in workers)}",
+            f"You are a manager agent. Break down this task and delegate sub-tasks to workers:\n"
+            f"{query}\n\nAvailable workers: {', '.join(w.name + ' (' + w.role_description + ')' for w in workers)}",
             **kwargs,
         )
+        manager.state = AgentState.COMPLETED
 
         all_steps = list(manager_resp.steps)
         total_tokens = TokenUsage(
@@ -449,29 +687,144 @@ class MultiAgentSystem:
             output=manager_resp.tokens_used.output,
             total=manager_resp.tokens_used.total,
         )
+        agent_outputs: dict[str, str] = {manager.name: manager_resp.output}
 
         worker_results: list[str] = []
         for worker in workers:
+            worker.state = AgentState.RUNNING
+            self.bus.publish(AgentMessage(
+                sender=manager.name, recipient=worker.name,
+                content=manager_resp.output, msg_type="request",
+            ))
             resp = await worker.agent.run(
                 f"The manager assigned you this task: {manager_resp.output}\n"
-                f"Original question: {query}",
+                f"Your role: {worker.role_description}\nOriginal question: {query}",
                 **kwargs,
             )
+            worker.state = AgentState.COMPLETED
             worker_results.append(f"{worker.name}: {resp.output}")
+            agent_outputs[worker.name] = resp.output
             all_steps.extend(resp.steps)
-            total_tokens.input += resp.tokens_used.input
-            total_tokens.output += resp.tokens_used.output
-            total_tokens.total += resp.tokens_used.total
+            self._accumulate_tokens(total_tokens, resp)
 
+        # Manager synthesizes
         final = await manager.agent.run(
-            f"Synthesize these worker results:\n" + "\n".join(worker_results) + f"\n\nOriginal: {query}",
+            f"Synthesize these worker results into a final answer:\n"
+            + "\n".join(worker_results) + f"\n\nOriginal: {query}",
             **kwargs,
         )
-        total_tokens.input += final.tokens_used.input
-        total_tokens.output += final.tokens_used.output
-        total_tokens.total += final.tokens_used.total
+        self._accumulate_tokens(total_tokens, final)
+        agent_outputs[f"{manager.name}_final"] = final.output
 
-        return AgentResponse(output=final.output, steps=all_steps, tokens_used=total_tokens)
+        return OrchestrationResult(
+            output=final.output, agent_outputs=agent_outputs,
+            steps=all_steps, tokens_used=total_tokens,
+        )
+
+    async def _run_swarm(self, query: str, **kwargs: Any) -> OrchestrationResult:
+        """Dynamic routing: route query to the best-matching agent by domain."""
+        all_steps: list[AgentStep] = []
+        total_tokens = TokenUsage()
+        agent_outputs: dict[str, str] = {}
+
+        # Route based on domain keywords in query
+        query_lower = query.lower()
+        matched_agents = []
+        for role in self.agents.values():
+            if role.domain and role.domain.lower() in query_lower:
+                matched_agents.append(role)
+
+        # Fallback: use all agents if no domain match
+        if not matched_agents:
+            matched_agents = list(self.agents.values())
+
+        # Sort by priority (higher first)
+        matched_agents.sort(key=lambda r: r.priority, reverse=True)
+
+        for role in matched_agents:
+            role.state = AgentState.RUNNING
+            resp = await role.agent.run(query, **kwargs)
+            role.state = AgentState.COMPLETED
+            agent_outputs[role.name] = resp.output
+            all_steps.extend(resp.steps)
+            self._accumulate_tokens(total_tokens, resp)
+
+            # If first high-priority agent gives confident answer, stop
+            if role.priority > 0 and resp.output:
+                break
+
+        last = list(agent_outputs.values())[-1] if agent_outputs else ""
+        return OrchestrationResult(
+            output=last, agent_outputs=agent_outputs,
+            steps=all_steps, tokens_used=total_tokens,
+        )
+
+    async def _run_supervisor(self, query: str, **kwargs: Any) -> OrchestrationResult:
+        """Supervisor pattern: a dedicated supervisor agent decides routing and validates outputs."""
+        agent_list = list(self.agents.values())
+        if len(agent_list) < 2:
+            return await self._run_sequential(query, **kwargs)
+
+        supervisor = agent_list[0]
+        workers = {w.name: w for w in agent_list[1:]}
+        all_steps: list[AgentStep] = []
+        total_tokens = TokenUsage()
+        agent_outputs: dict[str, str] = {}
+
+        for _round in range(self.max_rounds):
+            # Supervisor decides which worker to call
+            worker_desc = "\n".join(
+                f"- {w.name}: {w.role_description}" for w in workers.values()
+            )
+            supervisor.state = AgentState.RUNNING
+            decision = await supervisor.agent.run(
+                f"You are a supervisor. Given this query, decide which worker to call next.\n"
+                f"Query: {query}\n"
+                f"Previous results: {json.dumps(agent_outputs) if agent_outputs else 'None'}\n"
+                f"Workers:\n{worker_desc}\n\n"
+                f"Respond with: CALL <worker_name> or DONE <final_answer>",
+                **kwargs,
+            )
+            supervisor.state = AgentState.COMPLETED
+            all_steps.extend(decision.steps)
+            self._accumulate_tokens(total_tokens, decision)
+
+            text = decision.output.strip()
+            if text.upper().startswith("DONE"):
+                final_answer = text[4:].strip()
+                return OrchestrationResult(
+                    output=final_answer, agent_outputs=agent_outputs,
+                    steps=all_steps, tokens_used=total_tokens,
+                )
+
+            # Parse CALL <worker>
+            called_worker = None
+            if text.upper().startswith("CALL"):
+                worker_name = text[4:].strip().split()[0] if len(text) > 4 else ""
+                called_worker = workers.get(worker_name)
+
+            if called_worker is None:
+                called_worker = next(iter(workers.values()))
+
+            called_worker.state = AgentState.RUNNING
+            resp = await called_worker.agent.run(query, **kwargs)
+            called_worker.state = AgentState.COMPLETED
+            agent_outputs[called_worker.name] = resp.output
+            all_steps.extend(resp.steps)
+            self._accumulate_tokens(total_tokens, resp)
+
+        # Fallback synthesis
+        merged = "\n".join(f"{n}: {o}" for n, o in agent_outputs.items())
+        return OrchestrationResult(
+            output=merged, agent_outputs=agent_outputs,
+            steps=all_steps, tokens_used=total_tokens,
+        )
+
+    def get_run_log(self) -> list[dict[str, Any]]:
+        return list(self._run_log)
+
+    def get_agent_states(self) -> dict[str, str]:
+        return {name: role.state.value for name, role in self.agents.items()}
 
 
 # ── Agent Factory ────────────────────────────────────────────────────────────
@@ -503,3 +856,63 @@ class AgentExecutor:
         if cls is None:
             raise ValueError(f"Unknown agent type: {at}")
         return cls(llm, tools, max_iterations=max_iterations, memory=memory, verbose=verbose)
+
+
+# ── Enterprise Pipeline Builder ──────────────────────────────────────────────
+
+
+class AgentPipelineBuilder:
+    """Fluent builder for constructing multi-agent orchestration pipelines."""
+
+    def __init__(self) -> None:
+        self._roles: list[AgentRole] = []
+        self._coordination: CoordinationMode = CoordinationMode.SEQUENTIAL
+        self._max_rounds: int = 3
+        self._cost_limit: float | None = None
+        self._policy_check: Callable | None = None
+        self._bus: MessageBus | None = None
+
+    def add_agent(
+        self,
+        name: str,
+        agent: BaseAgent,
+        *,
+        role_description: str = "",
+        priority: int = 0,
+        domain: str = "",
+    ) -> AgentPipelineBuilder:
+        self._roles.append(AgentRole(
+            name=name, agent=agent,
+            role_description=role_description, priority=priority, domain=domain,
+        ))
+        return self
+
+    def with_coordination(self, mode: str | CoordinationMode) -> AgentPipelineBuilder:
+        self._coordination = CoordinationMode(mode) if isinstance(mode, str) else mode
+        return self
+
+    def with_max_rounds(self, rounds: int) -> AgentPipelineBuilder:
+        self._max_rounds = rounds
+        return self
+
+    def with_cost_limit(self, limit_usd: float) -> AgentPipelineBuilder:
+        self._cost_limit = limit_usd
+        return self
+
+    def with_policy_check(self, check: Callable) -> AgentPipelineBuilder:
+        self._policy_check = check
+        return self
+
+    def with_message_bus(self, bus: MessageBus) -> AgentPipelineBuilder:
+        self._bus = bus
+        return self
+
+    def build(self) -> MultiAgentSystem:
+        return MultiAgentSystem(
+            self._roles,
+            coordination=self._coordination,
+            message_bus=self._bus,
+            max_rounds=self._max_rounds,
+            cost_limit_usd=self._cost_limit,
+            policy_check=self._policy_check,
+        )

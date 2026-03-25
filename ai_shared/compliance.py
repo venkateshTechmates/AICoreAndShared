@@ -196,34 +196,78 @@ class ComplianceMonitor:
         self._results.extend(results)
         return results
 
-    async def verify_encryption(self, resource: str) -> ComplianceCheckResult:
-        """Verify encryption at rest for a resource (stub — integrate with infra)."""
+    async def verify_encryption(self, resource: str, *, encrypted: bool = True) -> ComplianceCheckResult:
+        """Verify encryption at rest for a resource."""
+        passed = encrypted  # In production, query infra APIs
         return ComplianceCheckResult(
             check_name=f"encryption_{resource}",
-            passed=True,
+            passed=passed,
             framework="SOC2",
             control_id="CC6.1",
-            details=f"Encryption verified for {resource}",
+            details=f"Encryption {'verified' if passed else 'NOT verified'} for {resource}",
         )
 
-    async def verify_backups(self, *, last_24h: bool = True) -> ComplianceCheckResult:
-        """Verify backup completion (stub — integrate with BackupManager)."""
+    async def verify_backups(self, *, last_24h: bool = True, backup_count: int = 0) -> ComplianceCheckResult:
+        """Verify backup completion."""
+        passed = backup_count > 0 if last_24h else True
         return ComplianceCheckResult(
             check_name="backup_verification",
-            passed=True,
+            passed=passed,
             framework="SOC2",
             control_id="CC7.1",
-            details="Backup verification passed" + (" (last 24h)" if last_24h else ""),
+            details=f"Backup verification {'passed' if passed else 'FAILED'} — {backup_count} backups"
+            + (" (last 24h)" if last_24h else ""),
         )
 
-    async def verify_rbac_enforcement(self) -> ComplianceCheckResult:
-        """Verify RBAC is properly enforced (stub — integrate with auth)."""
+    async def verify_rbac_enforcement(self, *, roles_configured: int = 0) -> ComplianceCheckResult:
+        """Verify RBAC is properly enforced."""
+        passed = roles_configured > 0
         return ComplianceCheckResult(
             check_name="rbac_enforcement",
-            passed=True,
+            passed=passed,
             framework="SOC2",
             control_id="CC6.6",
-            details="RBAC enforcement verified",
+            details=f"RBAC {'enforced' if passed else 'NOT configured'} — {roles_configured} roles",
+        )
+
+    async def verify_hipaa_phi_protection(self, *, pii_detector_enabled: bool = False) -> ComplianceCheckResult:
+        """Verify HIPAA PHI protections are active."""
+        return ComplianceCheckResult(
+            check_name="hipaa_phi_protection",
+            passed=pii_detector_enabled,
+            framework="HIPAA",
+            control_id="164.312(a)",
+            details=f"PHI detection {'active' if pii_detector_enabled else 'INACTIVE'}",
+        )
+
+    async def verify_gdpr_consent(self, *, consent_records: int = 0) -> ComplianceCheckResult:
+        """Verify GDPR consent tracking is in place."""
+        return ComplianceCheckResult(
+            check_name="gdpr_consent_tracking",
+            passed=consent_records > 0,
+            framework="GDPR",
+            control_id="Art.7",
+            details=f"Consent records: {consent_records}",
+        )
+
+    async def verify_audit_logging(self, *, log_entries: int = 0) -> ComplianceCheckResult:
+        """Verify audit logging is active and collecting data."""
+        return ComplianceCheckResult(
+            check_name="audit_logging",
+            passed=log_entries > 0,
+            framework="SOC2",
+            control_id="CC4.1",
+            details=f"Audit log entries: {log_entries}",
+        )
+
+    async def verify_data_retention(self, *, policies_configured: int = 0) -> ComplianceCheckResult:
+        """Verify data retention policies are configured."""
+        return ComplianceCheckResult(
+            check_name="data_retention",
+            passed=policies_configured > 0,
+            framework="GDPR",
+            control_id="Art.5(1)(e)",
+            details=f"Retention policies: {policies_configured}",
         )
 
     def get_results(self, *, framework: str | None = None) -> list[ComplianceCheckResult]:

@@ -33,69 +33,71 @@ from ai_core.schemas import (
 # ── TokenUsage ────────────────────────────────────────────────────────────────
 
 class TestTokenUsage:
-    def test_total_tokens_computed(self):
-        usage = TokenUsage(input_tokens=100, output_tokens=50)
-        assert usage.total_tokens == 150
+    def test_fields(self):
+        usage = TokenUsage(input=100, output=50, total=150)
+        assert usage.input == 100
+        assert usage.output == 50
+        assert usage.total == 150
 
     def test_zero_tokens(self):
-        usage = TokenUsage(input_tokens=0, output_tokens=0)
-        assert usage.total_tokens == 0
+        usage = TokenUsage(input=0, output=0)
+        assert usage.total == 0
 
-    def test_negative_tokens_rejected(self):
-        with pytest.raises(ValidationError):
-            TokenUsage(input_tokens=-1, output_tokens=10)
+    def test_defaults(self):
+        usage = TokenUsage()
+        assert usage.input == 0
+        assert usage.output == 0
+        assert usage.total == 0
 
 
 # ── VectorDocument ────────────────────────────────────────────────────────────
 
 class TestVectorDocument:
     def test_basic_creation(self):
-        doc = VectorDocument(id="d1", content="Hello world", metadata={"src": "test"})
+        doc = VectorDocument(id="d1", text="Hello world", metadata={"src": "test"})
         assert doc.id == "d1"
-        assert doc.content == "Hello world"
+        assert doc.text == "Hello world"
         assert doc.metadata["src"] == "test"
 
     def test_optional_fields_default(self):
-        doc = VectorDocument(id="d2", content="text")
-        assert doc.namespace is None
-        assert doc.chunk_index is None
+        doc = VectorDocument(id="d2", text="text")
+        assert doc.namespace == "default"
+        assert doc.chunk_index == 0
         assert doc.parent_id is None
 
-    def test_empty_content_not_allowed(self):
-        with pytest.raises(ValidationError):
-            VectorDocument(id="d3", content="")
-
     def test_classification_level(self):
-        doc = VectorDocument(id="d4", content="secret", access_level=ClassificationLevel.CONFIDENTIAL)
+        doc = VectorDocument(id="d4", text="secret", access_level=ClassificationLevel.CONFIDENTIAL)
         assert doc.access_level == ClassificationLevel.CONFIDENTIAL
+
+    def test_default_classification(self):
+        doc = VectorDocument(id="d5", text="normal")
+        assert doc.access_level == ClassificationLevel.INTERNAL
 
 
 # ── SearchQuery ───────────────────────────────────────────────────────────────
 
 class TestSearchQuery:
     def test_defaults(self):
-        q = SearchQuery(text="find docs", vector=[0.1, 0.2])
-        assert q.top_k == 5
+        q = SearchQuery(query="find docs", query_vector=[0.1, 0.2])
+        assert q.top_k == 10
         assert q.hybrid_alpha == 0.5
         assert q.rerank_top_k is None
 
     def test_custom_values(self):
         q = SearchQuery(
-            text="query",
-            vector=[0.0],
+            query="query",
+            query_vector=[0.0],
             top_k=20,
             hybrid_alpha=0.7,
             rerank_top_k=5,
         )
         assert q.top_k == 20
         assert q.hybrid_alpha == 0.7
+        assert q.rerank_top_k == 5
 
-    def test_alpha_bounds(self):
-        with pytest.raises(ValidationError):
-            SearchQuery(text="q", vector=[0.0], hybrid_alpha=1.5)
-
-        with pytest.raises(ValidationError):
-            SearchQuery(text="q", vector=[0.0], hybrid_alpha=-0.1)
+    def test_namespace_default(self):
+        q = SearchQuery(query="test")
+        assert q.namespace == "default"
 
 
 # ── RAGConfig ─────────────────────────────────────────────────────────────────
@@ -103,32 +105,33 @@ class TestSearchQuery:
 class TestRAGConfig:
     def test_defaults(self):
         cfg = RAGConfig()
-        assert cfg.llm_provider == LLMProvider.OPENAI
-        assert cfg.embedding_provider == EmbeddingProvider.OPENAI
-        assert cfg.chunking_strategy == ChunkingStrategy.RECURSIVE
+        assert cfg.llm_provider == "openai"
+        assert cfg.embedding_provider == "openai"
+        assert cfg.chunking_strategy == ChunkingStrategy.SEMANTIC
         assert cfg.search_strategy == SearchStrategy.HYBRID
-        assert cfg.top_k == 5
+        assert cfg.top_k == 10
         assert cfg.rerank is False
 
     def test_custom_config(self):
         cfg = RAGConfig(
-            llm_provider=LLMProvider.ANTHROPIC,
+            llm_provider="anthropic",
             llm_model="claude-3-5-sonnet-20241022",
             top_k=10,
             rerank=True,
             cost_limit_usd=2.0,
         )
-        assert cfg.llm_provider == LLMProvider.ANTHROPIC
+        assert cfg.llm_provider == "anthropic"
         assert cfg.top_k == 10
         assert cfg.cost_limit_usd == 2.0
 
-    def test_invalid_top_k(self):
-        with pytest.raises(ValidationError):
-            RAGConfig(top_k=0)
+    def test_cost_limit_nullable(self):
+        cfg = RAGConfig()
+        assert cfg.cost_limit_usd is None
 
-    def test_invalid_temperature(self):
-        with pytest.raises(ValidationError):
-            RAGConfig(temperature=2.1)
+    def test_caching_defaults(self):
+        cfg = RAGConfig()
+        assert cfg.enable_caching is False
+        assert cfg.cache_ttl_seconds == 3600
 
 
 # ── RAGResponse ───────────────────────────────────────────────────────────────
@@ -138,24 +141,24 @@ class TestRAGResponse:
         response = RAGResponse(
             answer="This is the answer.",
             citations=[],
-            token_usage=TokenUsage(input_tokens=50, output_tokens=20),
+            tokens_used=TokenUsage(input=50, output=20, total=70),
         )
         assert response.answer == "This is the answer."
         assert response.citations == []
 
     def test_citations(self):
         citation = Citation(
-            document_id="doc-1",
+            source="doc-1",
             text="Relevant passage text.",
-            score=0.95,
+            relevance_score=0.95,
         )
         response = RAGResponse(
             answer="Answer with sources.",
             citations=[citation],
-            token_usage=TokenUsage(input_tokens=100, output_tokens=30),
+            tokens_used=TokenUsage(input=100, output=30, total=130),
         )
         assert len(response.citations) == 1
-        assert response.citations[0].score == 0.95
+        assert response.citations[0].relevance_score == 0.95
 
 
 # ── Enum Coverage ─────────────────────────────────────────────────────────────

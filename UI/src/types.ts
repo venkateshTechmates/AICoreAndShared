@@ -20,6 +20,8 @@ export interface RAGConfig {
   llm: string;
 }
 
+export type CoordinationMode = 'sequential' | 'parallel' | 'debate' | 'hierarchical' | 'swarm' | 'supervisor';
+
 export interface AgentRole {
   id: string;
   name: string;
@@ -32,7 +34,7 @@ export interface AgentTeam {
   id: string;
   name: string;
   agents: AgentRole[];
-  coordination: 'hierarchical' | 'sequential' | 'swarm';
+  coordination: CoordinationMode;
 }
 
 export interface Metric {
@@ -48,4 +50,17 @@ export interface LineageEntry {
   status: 'Success' | 'Processing' | 'Error';
   tokens: string;
   time: string;
+}
+
+export interface DomainExample {
+  id: string;
+  domain: string;
+  title: string;
+  description: string;
+  mode: CoordinationMode;
+  compliance: string[];
+  agents: string[];
+  file: string;
+  color: string;
+  icon: string;
 }

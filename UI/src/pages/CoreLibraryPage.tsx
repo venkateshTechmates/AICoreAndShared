@@ -112,15 +112,17 @@ const CoreLibraryPage = () => (
       <div className="flex items-center gap-3">
         <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg"><Users size={20} /></div>
         <h3 className="text-2xl font-bold text-zinc-900">6. Agentic AI Framework</h3>
+        <span className="text-xs font-mono bg-zinc-100 text-zinc-500 px-2 py-1 rounded">ai_core.agents</span>
       </div>
-      <CodeBlock code={'from ai_core.agents import AgentExecutor, ToolRegistry, AgentType\n\n@ToolRegistry.register\nclass WebSearchTool(Tool):\n    name = \"web_search\"\n    description = \"Search the web\"\n    async def run(self, query: str) -> str: ...\n\nagent = AgentExecutor(\n    llm=\"gpt-4o\",\n    tools=ToolRegistry.get_all(),\n    agent_type=AgentType.REACT,\n    max_iterations=10,\n    memory=ConversationBufferMemory(),\n)\n\nresult = await agent.run(\"Research AI trends in 2026\")'} />
-      <DataTable headers={['Agent Type', 'Description', 'Best For']} rows={[
-        ['ReAct', 'Reason-Act loop with tool use', 'General agent tasks'],
-        ['Plan-and-Execute', 'Plan steps upfront, execute sequentially', 'Complex multi-step'],
-        ['Reflexion', 'Self-evaluating iterative agent', 'Quality-critical'],
-        ['Function Call', 'OpenAI function calling format', 'Structured interactions'],
-        ['Structured Output', 'Forces schema-compliant JSON', 'Data extraction'],
-        ['Custom', 'Bring-your-own reasoning loop', 'Specialized needs'],
+      <p className="text-zinc-500 leading-relaxed">Enterprise multi-agent orchestration with six coordination modes, pub/sub MessageBus, fluent AgentPipelineBuilder, and structured OrchestrationResult.</p>
+      <CodeBlock code={'from ai_core.agents import MultiAgentSystem, AgentPipelineBuilder\nfrom ai_core.schemas import CoordinationMode\n\n# Six coordination modes\nsystem = MultiAgentSystem(\n    agents=[research_agent, analysis_agent, writer_agent],\n    mode=CoordinationMode.SEQUENTIAL,     # or PARALLEL, DEBATE, HIERARCHICAL, SWARM, SUPERVISOR\n)\nresult = await system.run("Summarise the Q4 earnings report.")\n\n# Debate mode — structured critique over 3 rounds\ndebate = MultiAgentSystem(\n    agents=[bull_agent, bear_agent, moderator_agent],\n    mode=CoordinationMode.DEBATE,\n    rounds=3,\n)\nresult = await debate.run("What is the fair value of this asset?")\nprint(result.consensus)     # final agreed answer\n\n# Fluent pipeline builder\npipeline = (\n    AgentPipelineBuilder()\n    .add_stage("intake",  intake_agent)\n    .add_stage("analyse", analysis_agent)\n    .add_stage("report",  writer_agent)\n    .with_mode(CoordinationMode.SEQUENTIAL)\n    .build()\n)\nresult = await pipeline.run("Generate compliance report")'} />
+      <DataTable headers={['Coordination Mode', 'Pattern', 'Best For']} rows={[
+        ['SEQUENTIAL', 'A → B → C', 'Report generation, data pipelines'],
+        ['PARALLEL', 'A + B + C → merge', 'Intelligence gathering, risk scoring'],
+        ['DEBATE', 'A ↔ B (N rounds)', 'Valuation, adversarial review'],
+        ['HIERARCHICAL', 'Supervisor → workers', 'Medical triage, compliance workflows'],
+        ['SWARM', 'Shared workspace', 'Knowledge graph construction'],
+        ['SUPERVISOR', 'Coordinator → dynamic dispatch', 'Loan underwriting, approvals'],
       ]} />
     </section>
 

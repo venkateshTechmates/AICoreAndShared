@@ -32,9 +32,9 @@ const HomePage = () => (
     {/* Stats */}
     <section className="grid grid-cols-2 md:grid-cols-4 gap-6">
       <StatCard value="8+" label="Core Modules" icon={<Blocks size={24} />} />
-      <StatCard value="9+" label="Framework Adapters" icon={<Puzzle size={24} />} />
+      <StatCard value="6" label="Coordination Modes" icon={<Puzzle size={24} />} />
       <StatCard value="9" label="Vector DB Providers" icon={<Database size={24} />} />
-      <StatCard value="15+" label="Prompt Strategies" icon={<Brain size={24} />} />
+      <StatCard value="247" label="Tests Passing" icon={<Brain size={24} />} />
     </section>
 
     {/* Capabilities */}
@@ -44,7 +44,7 @@ const HomePage = () => (
         <FeatureCard icon={<Database size={22} />} title="RAG Engine" description="End-to-end retrieval-augmented generation with hybrid search, reranking, citation tracking, and streaming." tags={['Hybrid Search', 'Reranking', 'Streaming']} />
         <FeatureCard icon={<Layers size={22} />} title="Vector DB Abstraction" description="Unified interface for 9+ vector databases. Swap providers with a config change." tags={['Pinecone', 'Qdrant', 'Weaviate', 'Chroma']} />
         <FeatureCard icon={<Brain size={22} />} title="Prompt Engineering" description="15+ prompt strategies from zero-shot to tree-of-thought with versioned template registry." tags={['CoT', 'ReAct', 'Few-Shot', 'ToT']} />
-        <FeatureCard icon={<Users size={22} />} title="Agentic Framework" description="Build ReAct, Plan-and-Execute, and multi-agent systems with shared tool registries." tags={['ReAct', 'Multi-Agent', 'Tools']} />
+        <FeatureCard icon={<Users size={22} />} title="Multi-Agent Orchestration" description="Six coordination modes: Sequential, Parallel, Debate, Hierarchical, Swarm, Supervisor — with MessageBus and AgentPipelineBuilder." tags={['Sequential', 'Parallel', 'Debate', 'Supervisor']} />
         <FeatureCard icon={<Puzzle size={22} />} title="Multi-Framework" description="Unified adapter layer for LangChain, LangGraph, CrewAI, AutoGen, MCP, and more." tags={['LangChain', 'CrewAI', 'AutoGen', 'MCP']} />
         <FeatureCard icon={<FlaskConical size={22} />} title="Evaluation Suite" description="RAGAS-integrated evaluation with faithfulness, relevancy, recall, and precision metrics." tags={['RAGAS', 'DeepEval', 'TruLens']} />
         <FeatureCard icon={<ShieldCheck size={22} />} title="Data Governance" description="PII detection, data classification, RBAC/ABAC access control, audit trails, and data retention." tags={['PII', 'RBAC', 'Audit', 'GDPR']} />

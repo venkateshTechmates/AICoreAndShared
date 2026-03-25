@@ -39,13 +39,9 @@ def rag_config() -> RAGConfig:
 
 
 @pytest.fixture
-def sample_docs() -> list[VectorDocument]:
+def sample_docs() -> list[str]:
     return [
-        VectorDocument(
-            id=f"doc-{i}",
-            content=f"Document {i}: Sample content about topic {i}.",
-            metadata={"source": "test", "index": i},
-        )
+        f"Document {i}: Sample content about topic {i}."
         for i in range(5)
     ]
 
@@ -55,8 +51,7 @@ def mock_rag_response() -> RAGResponse:
     return RAGResponse(
         answer="This is a generated answer based on the retrieved context.",
         citations=[],
-        token_usage=TokenUsage(input_tokens=150, output_tokens=50),
-        cost_usd=0.0005,
+        tokens_used=TokenUsage(input=150, output=50, total=200),
     )
 
 
@@ -119,6 +114,7 @@ class TestIngest:
 
         mock_store = AsyncMock()
         mock_embedder = AsyncMock()
+        mock_embedder.embed = AsyncMock(return_value=[0.1] * 1536)
         mock_embedder.embed_documents = AsyncMock(
             return_value=[[0.1] * 1536 for _ in range(len(sample_docs))]
         )
@@ -135,14 +131,12 @@ class TestIngest:
         pipeline = RAGPipeline(rag_config)
         mock_store = AsyncMock()
         mock_embedder = AsyncMock()
+        mock_embedder.embed = AsyncMock(return_value=[0.0] * 1536)
         mock_embedder.embed_documents = AsyncMock(return_value=[[0.0] * 1536])
         pipeline.set_store(mock_store)
         pipeline.set_embedder(mock_embedder)
 
-        large_docs = [
-            VectorDocument(id=f"d-{i}", content=f"Doc {i} content here.", metadata={})
-            for i in range(50)
-        ]
+        large_docs = [f"Doc {i} content here." for i in range(50)]
         await pipeline.batch_ingest(large_docs, namespace="batch-ns", batch_size=10)
         assert mock_store.upsert.call_count >= 1
 
@@ -158,17 +152,19 @@ class TestQuery:
         mock_store.search = AsyncMock(return_value=[
             MagicMock(
                 id="doc-1",
-                content="Retrieved context about the topic.",
+                text="Retrieved context about the topic.",
                 score=0.92,
                 metadata={"source": "test"},
+                source="test",
             )
         ])
         mock_embedder = AsyncMock()
         mock_embedder.embed = AsyncMock(return_value=[0.1] * 1536)
         mock_llm = AsyncMock()
-        mock_llm.chat = AsyncMock(return_value=MagicMock(
-            content=mock_rag_response.answer,
-            usage=TokenUsage(input_tokens=150, output_tokens=50),
+        mock_llm.generate = AsyncMock(return_value=MagicMock(
+            text=mock_rag_response.answer,
+            cost=0.001,
+            usage=MagicMock(input=150, output=50, total=200),
         ))
 
         pipeline.set_store(mock_store)
@@ -186,14 +182,15 @@ class TestQuery:
 
         mock_store = AsyncMock()
         mock_store.search = AsyncMock(return_value=[
-            MagicMock(id="src-1", content="Source content.", score=0.88, metadata={})
+            MagicMock(id="src-1", text="Source content.", score=0.88, metadata={"source": "test"}, source="test")
         ])
         mock_embedder = AsyncMock()
         mock_embedder.embed = AsyncMock(return_value=[0.2] * 1536)
         mock_llm = AsyncMock()
-        mock_llm.chat = AsyncMock(return_value=MagicMock(
-            content="Answer citing sources.",
-            usage=TokenUsage(input_tokens=100, output_tokens=30),
+        mock_llm.generate = AsyncMock(return_value=MagicMock(
+            text="Answer citing sources.",
+            cost=0.001,
+            usage=MagicMock(input=100, output=30, total=130),
         ))
 
         pipeline.set_store(mock_store)
@@ -201,7 +198,6 @@ class TestQuery:
         pipeline.set_llm(mock_llm)
 
         response = await pipeline.query("Test query", include_sources=True)
-        # Response may or may not have citations depending on impl
         assert hasattr(response, "citations")
 
     @pytest.mark.asyncio
@@ -212,8 +208,22 @@ class TestQuery:
         pipeline = RAGPipeline(config)
         pipeline._total_cost_usd = 1.0  # already over limit
 
-        with pytest.raises(RuntimeError, match="cost"):
-            await pipeline.query("Will this be blocked?")
+        # Set up mocks so query can execute
+        mock_store = AsyncMock()
+        mock_store.search = AsyncMock(return_value=[])
+        mock_embedder = AsyncMock()
+        mock_embedder.embed = AsyncMock(return_value=[0.0] * 1536)
+        mock_llm = AsyncMock()
+        mock_llm.generate = AsyncMock(return_value=MagicMock(
+            text="answer", cost=0.01,
+            usage=MagicMock(input=10, output=5, total=15),
+        ))
+        pipeline.set_store(mock_store)
+        pipeline.set_embedder(mock_embedder)
+        pipeline.set_llm(mock_llm)
+
+        response = await pipeline.query("Will this be blocked?")
+        assert "COST LIMIT EXCEEDED" in response.answer
 
 
 # ── Streaming ─────────────────────────────────────────────────────────────────

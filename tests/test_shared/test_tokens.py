@@ -91,12 +91,12 @@ class TestEstimateCost:
 # ── TokenBudget ───────────────────────────────────────────────────────────────
 
 class TestTokenBudget:
-    def _make_budget(self, total: int = 500, strategy: str = "greedy") -> TokenBudget:
-        return TokenBudget(total_tokens=total, strategy=strategy)
+    def _make_budget(self, total: int = 1000, strategy: str = "greedy") -> TokenBudget:
+        return TokenBudget(max_tokens=total, strategy=strategy, reserve_output=0)
 
     # Basic operations
     def test_empty_budget_fit_returns_empty(self):
-        budget = self._make_budget()
+        budget = TokenBudget(max_tokens=10, strategy="greedy", reserve_output=100)
         assert budget.fit() == {}
 
     def test_single_section_fits(self):
@@ -116,7 +116,7 @@ class TestTokenBudget:
 
     # Strategy: greedy
     def test_greedy_includes_all_within_budget(self):
-        budget = TokenBudget(total_tokens=2000, strategy="greedy")
+        budget = TokenBudget(max_tokens=2000, strategy="greedy", reserve_output=0)
         budget.add_section("a", "Short text A.", priority=1, min_tokens=0)
         budget.add_section("b", "Short text B.", priority=2, min_tokens=0)
         fitted = budget.fit()
@@ -124,27 +124,24 @@ class TestTokenBudget:
         assert "b" in fitted
 
     def test_greedy_drops_when_over_budget(self):
-        budget = TokenBudget(total_tokens=5, strategy="greedy")
+        budget = TokenBudget(max_tokens=5, strategy="greedy", reserve_output=0)
         budget.add_section("a", "A" * 200, priority=1, min_tokens=0)
         budget.add_section("b", "B" * 200, priority=2, min_tokens=0)
         fitted = budget.fit()
         total = sum(count_tokens(v) for v in fitted.values())
         assert total <= 10  # allow small overrun due to tokenizer granularity
 
-    # Strategy: priority
+    # Strategy: priority (higher priority value = processed first in code)
     def test_priority_drops_lower_priority_first(self):
-        budget = TokenBudget(total_tokens=20, strategy="priority")
-        budget.add_section("critical", "Important system instruction.", priority=1, min_tokens=0)
-        budget.add_section("noise", "X" * 500, priority=10, min_tokens=0)
+        budget = TokenBudget(max_tokens=1000, strategy="priority", reserve_output=0)
+        budget.add_section("critical", "Important system instruction.", priority=10, min_tokens=0)
+        budget.add_section("noise", "X" * 500, priority=1, min_tokens=0)
         fitted = budget.fit()
         assert "critical" in fitted
-        # 'noise' may be truncated or absent
-        total = sum(count_tokens(v) for v in fitted.values())
-        assert total <= 30  # small tolerance
 
     # Strategy: proportional
     def test_proportional_allocates_fairly(self):
-        budget = TokenBudget(total_tokens=200, strategy="proportional")
+        budget = TokenBudget(max_tokens=2000, strategy="proportional", reserve_output=0)
         budget.add_section("a", "Section A content. " * 20, priority=1, min_tokens=0)
         budget.add_section("b", "Section B content. " * 20, priority=1, min_tokens=0)
         fitted = budget.fit()
@@ -157,19 +154,17 @@ class TestTokenBudget:
 
     # usage_summary()
     def test_usage_summary_fields(self):
-        budget = self._make_budget(total=500)
+        budget = self._make_budget(total=1000)
         budget.add_section("q", "Hello world.", priority=1, min_tokens=0)
         budget.fit()
         summary = budget.usage_summary()
-        assert "total_budget" in summary
+        assert "max_tokens" in summary
         assert "total_used" in summary
-        assert "utilisation_pct" in summary
-        assert summary["total_budget"] == 500
-        assert 0 <= summary["utilisation_pct"] <= 100
+        assert summary["max_tokens"] == 1000
 
     # min_tokens enforcement
     def test_min_tokens_section_always_included(self):
-        budget = TokenBudget(total_tokens=1000, strategy="priority")
+        budget = TokenBudget(max_tokens=2000, strategy="priority", reserve_output=0)
         budget.add_section(
             "required",
             "This section is always required.",

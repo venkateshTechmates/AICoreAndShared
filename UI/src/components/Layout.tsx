@@ -3,7 +3,7 @@ import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Database, Brain, Layers, Blocks, Play, Building,
-  GitBranch, ChevronRight, Menu, Workflow,
+  GitBranch, ChevronRight, Menu, Workflow, FlaskConical,
 } from 'lucide-react';
 
 import HomePage from '../pages/HomePage';
@@ -15,6 +15,7 @@ import EnterprisePage from '../pages/EnterprisePage';
 import PlaygroundPage from '../pages/PlaygroundPage';
 import PipelinesPage from '../pages/PipelinesPage';
 import WorkflowsPage from '../pages/WorkflowsPage';
+import DomainExamplesPage from '../pages/DomainExamplesPage';
 
 const navSections = [
   {
@@ -44,6 +45,7 @@ const navSections = [
     title: 'Interactive',
     items: [
       { to: '/playground', icon: Play, label: 'Playground' },
+      { to: '/domain-examples', icon: FlaskConical, label: 'Domain Examples' },
     ],
   },
 ];
@@ -129,6 +131,7 @@ const Layout = () => {
                   <Route path="/playground" element={<PlaygroundPage />} />
                   <Route path="/pipelines" element={<PipelinesPage />} />
                   <Route path="/workflows" element={<WorkflowsPage />} />
+                  <Route path="/domain-examples" element={<DomainExamplesPage />} />
                 </Routes>
               </motion.div>
             </AnimatePresence>

@@ -83,6 +83,15 @@ class AgentType(str, Enum):
     CUSTOM = "custom"
 
 
+class CoordinationMode(str, Enum):
+    SEQUENTIAL = "sequential"
+    PARALLEL = "parallel"
+    DEBATE = "debate"
+    HIERARCHICAL = "hierarchical"
+    SWARM = "swarm"
+    SUPERVISOR = "supervisor"
+
+
 class MemoryType(str, Enum):
     BUFFER = "buffer"
     SUMMARY = "summary"
@@ -195,12 +204,17 @@ class SearchQuery(BaseModel):
 
 
 class RAGConfig(BaseModel):
+    # Provider selections
+    llm_provider: str = "openai"
+    embedding_provider: str = "openai"
+    vector_store_provider: str = "qdrant"
     vector_db: VectorStoreProvider = VectorStoreProvider.QDRANT
     embedding_model: str = "text-embedding-3-large"
     llm_model: str = "gpt-4o"
     chunking_strategy: ChunkingStrategy = ChunkingStrategy.SEMANTIC
     search_strategy: SearchStrategy = SearchStrategy.HYBRID
     reranker: str | None = None
+    rerank: bool = False
     prompt_strategy: PromptStrategy = PromptStrategy.RAG
     temperature: float = 0.1
     max_tokens: int = 4096

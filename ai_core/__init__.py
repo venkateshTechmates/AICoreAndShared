@@ -15,6 +15,8 @@ __author__ = "AI Core Team"
 
 from ai_core.config import LibConfig
 from ai_core.schemas import (
+    AgentType,
+    CoordinationMode,
     RAGConfig,
     RAGResponse,
     VectorDocument,
@@ -22,6 +24,17 @@ from ai_core.schemas import (
     SearchResult,
     RerankerProvider,
     EmbeddingProvider,
+)
+from ai_core.agents import (
+    AgentExecutor,
+    AgentPipelineBuilder,
+    AgentRole,
+    BaseAgent,
+    MessageBus,
+    MultiAgentSystem,
+    Tool,
+    ToolRegistry,
+    tool,
 )
 
 __all__ = [
@@ -33,5 +46,16 @@ __all__ = [
     "SearchResult",
     "RerankerProvider",
     "EmbeddingProvider",
+    "AgentType",
+    "CoordinationMode",
+    "AgentExecutor",
+    "AgentPipelineBuilder",
+    "AgentRole",
+    "BaseAgent",
+    "MessageBus",
+    "MultiAgentSystem",
+    "Tool",
+    "ToolRegistry",
+    "tool",
     "__version__",
 ]
